@@ -49,8 +49,10 @@ let statsTimer = null;
 let pendingRemoteOffer = null;
 let screenTrack = null;
 
-// Servidores ICE (se obtienen del backend). Forzamos TURN únicamente.
-let rtcConfig = { iceServers: [], iceTransportPolicy: "relay" };
+// Servidores ICE (configurable vía backend)
+let rtcConfig = {
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+};
 let iceConfigPromise = null;
 
 // ---------- Utilidades ----------
@@ -68,29 +70,11 @@ async function ensureIceConfig() {
         const res = await fetch("/ice-config", { cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (data && Array.isArray(data.iceServers)) {
-          const turnOnly = data.iceServers
-            .map(server => {
-              const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-              const filtered = urls.filter(url => /^turns?:/i.test(url));
-              if (!filtered.length) return null;
-
-              return {
-                ...server,
-                urls: filtered.length === 1 ? filtered[0] : filtered,
-              };
-            })
-            .filter(Boolean);
-
-          const policy = data.iceTransportPolicy === "relay" ? "relay" : undefined;
-          rtcConfig = { iceServers: turnOnly, iceTransportPolicy: policy };
-          if (turnOnly.length) {
-            log("🔧 ICE (solo TURN)", turnOnly);
-          } else {
-            log("⚠️ Config ICE recibida pero sin TURN utilizable, las llamadas fallarán");
-          }
+        if (data && Array.isArray(data.iceServers) && data.iceServers.length) {
+          rtcConfig = { iceServers: data.iceServers };
+          log("🔧 ICE servers actualizados", data.iceServers);
         } else {
-          log("ℹ️ Config ICE vacía; no hay TURN disponible");
+          log("ℹ️ Config ICE vacía, se mantiene STUN público por defecto");
         }
       } catch (err) {
         log("⚠️ No se pudo obtener configuración ICE remota:", err.message || err);
@@ -357,14 +341,7 @@ async function ensurePC() {
   if (pc) return;
 
   await ensureIceConfig();
-  if (!rtcConfig.iceServers.length) {
-    throw new Error("No hay TURN configurado en el servidor");
-  }
-  const config = { iceServers: rtcConfig.iceServers };
-  if (rtcConfig.iceTransportPolicy) {
-    config.iceTransportPolicy = rtcConfig.iceTransportPolicy;
-  }
-  pc = new RTCPeerConnection(config);
+  pc = new RTCPeerConnection(rtcConfig);
 
   pc.addEventListener("connectionstatechange", () => {
     const st = pc.connectionState;
