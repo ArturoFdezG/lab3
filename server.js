@@ -2,6 +2,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import crypto from "crypto";
 import express from "express";
 import https from "https";
 import { Server as IOServer } from "socket.io";
@@ -27,6 +28,88 @@ app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 const PORT = process.env.PORT || 3000;
 const server = https.createServer({ key, cert }, app);
 const io = new IOServer(server);
+
+const defaultStunUrls = (process.env.STUN_URLS || "stun:stun.l.google.com:19302")
+  .split(",")
+  .map(url => url.trim())
+  .filter(Boolean);
+
+const baseIceServers = defaultStunUrls.map(url => ({ urls: url }));
+
+const turnUrls = (() => {
+  const urlsFromEnv = (process.env.TURN_URLS || "")
+    .split(",")
+    .map(url => url.trim())
+    .filter(Boolean);
+
+  if (urlsFromEnv.length) return urlsFromEnv;
+
+  const host = process.env.TURN_HOST?.trim();
+  if (!host) return urlsFromEnv;
+
+  const udpPort = process.env.TURN_PORT || "3478";
+  const tlsPort = process.env.TURN_TLS_PORT || "5349";
+  const transports = (process.env.TURN_TRANSPORTS || "udp,tcp")
+    .split(",")
+    .map(t => t.trim())
+    .filter(Boolean);
+
+  const computed = [];
+  transports.forEach(transport => {
+    computed.push(`turn:${host}:${udpPort}?transport=${transport}`);
+  });
+
+  if (process.env.TURN_DISABLE_TLS !== "1") {
+    computed.push(`turns:${host}:${tlsPort}?transport=udp`);
+  }
+
+  if (process.env.TURN_INCLUDE_STUN !== "0") {
+    baseIceServers.push({ urls: `stun:${host}:${udpPort}` });
+  }
+
+  return computed;
+})();
+
+const turnSecret = process.env.TURN_STATIC_SECRET;
+const turnUsername = process.env.TURN_USERNAME;
+const turnPassword = process.env.TURN_PASSWORD;
+const turnTtlSeconds = Number.parseInt(process.env.TURN_TTL || "3600", 10);
+const turnUserPrefix = process.env.TURN_USER_PREFIX || "webrtc";
+
+function buildIceServers() {
+  const iceServers = [...baseIceServers];
+
+  if (turnUrls.length === 0) {
+    return iceServers;
+  }
+
+  if (turnSecret) {
+    const timestamp = Math.floor(Date.now() / 1000) + Math.max(turnTtlSeconds, 1);
+    const username = `${timestamp}:${turnUserPrefix}`;
+    const credential = crypto.createHmac("sha1", turnSecret).update(username).digest("base64");
+    iceServers.push({
+      urls: turnUrls,
+      username,
+      credential,
+    });
+    return iceServers;
+  }
+
+  if (turnUsername && turnPassword) {
+    iceServers.push({
+      urls: turnUrls,
+      username: turnUsername,
+      credential: turnPassword,
+    });
+  }
+
+  return iceServers;
+}
+
+app.get("/ice-config", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ iceServers: buildIceServers() });
+});
 
 // Helpers
 function getRoomSize(room) {
