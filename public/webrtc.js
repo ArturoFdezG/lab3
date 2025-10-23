@@ -49,10 +49,11 @@ let statsTimer = null;
 let pendingRemoteOffer = null;
 let screenTrack = null;
 
-// Servidores ICE (STUN público)
-const rtcConfig = {
+// Servidores ICE (configurable vía backend)
+let rtcConfig = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
 };
+let iceConfigPromise = null;
 
 // ---------- Utilidades ----------
 function log(...args) {
@@ -61,6 +62,31 @@ function log(...args) {
   ui.log.textContent += line + "\n";
   ui.log.scrollTop = ui.log.scrollHeight;
 }
+
+async function ensureIceConfig() {
+  if (!iceConfigPromise) {
+    iceConfigPromise = (async () => {
+      try {
+        const res = await fetch("/ice-config", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data && Array.isArray(data.iceServers) && data.iceServers.length) {
+          rtcConfig = { iceServers: data.iceServers };
+          log("🔧 ICE servers actualizados", data.iceServers);
+        } else {
+          log("ℹ️ Config ICE vacía, se mantiene STUN público por defecto");
+        }
+      } catch (err) {
+        log("⚠️ No se pudo obtener configuración ICE remota:", err.message || err);
+      }
+    })();
+  }
+
+  return iceConfigPromise;
+}
+
+// Solicita la configuración ICE en segundo plano al cargar la página
+ensureIceConfig();
 
 function setBadge(el, text, type = "warn") {
   el.textContent = text;
@@ -310,6 +336,7 @@ async function ensureLocal() {
 async function ensurePC() {
   if (pc) return;
 
+  await ensureIceConfig();
   pc = new RTCPeerConnection(rtcConfig);
 
   pc.addEventListener("connectionstatechange", () => {
