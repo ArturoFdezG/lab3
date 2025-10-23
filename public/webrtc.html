@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WebRTC P2P – Challenge 2.1</title>
+<meta name="description" content="Aplicación WebRTC P2P para audio/vídeo bidireccional con señalización vía WebSocket." />
+<style>
+:root {
+--bg: #0f172a; /* slate-900 */
+--panel: #111827; /* gray-900 */
+--muted: #9ca3af; /* gray-400 */
+--text: #e5e7eb; /* gray-200 */
+--accent: #22d3ee; /* cyan-400 */
+--danger: #ef4444; /* red-500 */
+--ok: #22c55e; /* green-500 */
+--warn: #f59e0b; /* amber-500 */
+--border: #1f2937; /* gray-800 */
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+margin: 0;
+font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+background: radial-gradient(1200px 600px at 20% 0%, #0b1220 0%, var(--bg) 60%);
+color: var(--text);
+line-height: 1.45;
+}
+header {
+padding: 1rem 1.25rem;
+border-bottom: 1px solid var(--border);
+display: flex;
+align-items: center;
+justify-content: space-between;
+gap: 1rem;
+}
+header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+main { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 1rem; padding: 1rem; }
+@media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+.card {
+background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent 60%);
+border: 1px solid var(--border);
+border-radius: 14px;
+padding: 0.9rem;
+backdrop-filter: blur(6px);
+}
+.row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+.grow { flex: 1; min-width: 200px; }
+label { font-size: 0.9rem; color: var(--muted); }
+input[type="text"] {
+width: 100%;
+background: #0b1020;
+border: 1px solid var(--border);
+color: var(--text);
+border-radius: 10px;
+padding: .6rem .7rem;
+outline: none;
+}
+.btn {
+appearance: none;
+border: 1px solid var(--border);
+background: #0b1220;
+color: var(--text);
+padding: .55rem .8rem;
+border-radius: 10px;
+font-weight: 600;
+cursor: pointer;
+transition: transform .02s ease, border-color .2s ease, background-color .2s ease;
+}
+.btn:hover { border-color: #2a3a54; }
+.btn:active { transform: translateY(1px); }
+.btn.primary { border-color: rgba(34, 211, 238, .4); box-shadow: inset 0 0 0 1px rgba(34,211,238,.15); }
+.btn.danger { border-color: rgba(239,68,68,.4); }
+.btn.ghost { background: transparent; }
+.switch { display: inline-flex; align-items: center; gap: .5rem; user-select: none; }
+.badge {
+display: inline-flex;
+align-items: center;
+gap: .4rem;
+padding: .25rem .5rem;
+border-radius: 999px;
+border: 1px solid var(--border);
+font-size: .78rem;
+color: var(--muted);
+background: #0b1020;
+}
+.badge.ok { color: var(--ok); border-color: rgba(34,197,94,.35); }
+.badge.warn { color: var(--warn); border-color: rgba(245,158,11,.35); }
+.badge.err { color: var(--danger); border-color: rgba(239,68,68,.35); }
+.videos { display: grid; gap: .8rem; grid-template-columns: 1fr 1fr; }
+@media (max-width: 900px) { .videos { grid-template-columns: 1fr; } }
+video {
+width: 100%;
+aspect-ratio: 16/9;
+background: #000;
+border-radius: 12px;
+border: 1px solid #0008;
+display: block;
+}
+.legend { display: flex; justify-content: space-between; align-items: center; margin-top: .3rem; }
+.small { font-size: .82rem; color: var(--muted); }
+details { border-top: 1px dashed var(--border); margin-top: .6rem; padding-top: .6rem; }
+pre {
+margin: 0;
+white-space: pre-wrap;
+word-wrap: break-word;
+background: #070b15;
+border: 1px solid var(--border);
+border-radius: 10px;
+padding: .6rem;
+max-height: 250px;
+overflow: auto;
+font-size: .85rem;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+<h1>WebRTC P2P · Bidireccional A/V</h1>
+<div class="row">
+<span id="connStateBadge" class="badge warn" title="Estado de RTCPeerConnection">PC: <strong id="pcState">new</strong></span>
+<span id="iceStateBadge" class="badge warn" title="Estado ICE">ICE: <strong id="iceState">new</strong></span>
+<span id="roleBadge" class="badge" title="Rol">Rol: <strong id="role">—</strong></span>
+</div>
+</header>
+<main>
+<!-- Columna izquierda: vídeo y controles principales -->
+<section class="card">
+<div class="row" aria-label="Controles de sala y medios">
+<div class="grow">
+<label for="room">Sala</label>
+<input id="room" type="text" placeholder="room-123" autocomplete="off" />
+</div>
+<button id="btnJoin" class="btn primary" aria-label="Unirse a la sala">Unirse</button>
+<button id="btnLeave" class="btn" aria-label="Salir de la sala">Salir</button>
+<span id="participants" class="badge" title="Participantes">👥 0</span>
+</div>
+<div class="row" style="margin-top:.6rem">
+<button id="btnStart" class="btn primary" aria-label="Iniciar captura local">Iniciar local</button>
+<button id="btnCall" class="btn" aria-label="Iniciar llamada (crear offer)">Llamar</button>
+<button id="btnAnswer" class="btn" aria-label="Forzar respuesta si recibiste una oferta">Responder</button>
+<button id="btnHangup" class="btn danger" aria-label="Colgar">Colgar</button>
+<label class="switch" title="Activar/Desactivar Trickle ICE">
+<input type="checkbox" id="chkTrickle" checked />
+<span>Trickle ICE</span>
+</label>
+<label class="switch" title="Incluir micrófono">
+<input type="checkbox" id="chkAudio" checked />
+<span>Audio</span>
+</label>
+<label class="switch" title="Incluir cámara">
+<input type="checkbox" id="chkVideo" checked />
+<span>Vídeo</span>
+</label>
+</div>
+<div class="videos" style="margin-top:.8rem">
+<div>
+<video id="local" autoplay playsinline muted></video>
+<div class="legend">
+<span class="small">Local</span>
+<div class="row">
+<button id="btnToggleMic" class="btn ghost small" aria-label="Silenciar micrófono">Mic</button>
+<button id="btnToggleCam" class="btn ghost small" aria-label="Apagar cámara">Cam</button>
+<button id="btnShare" class="btn ghost small" aria-label="Compartir pantalla">Screen</button>
+</div>
+</div>
+</div>
+<div>
+<video id="remote" autoplay playsinline></video>
+<div class="legend">
+<span class="small">Remoto</span>
+<span id="selectedPair" class="small" title="Par de candidatos seleccionado">Par ICE: —</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Columna derecha: estado, depuración y enlaces útiles -->
+<aside class="card" aria-label="Panel de estado y depuración">
+<div class="row" style="justify-content: space-between;">
+<strong>Estado</strong>
+<a href="chrome://webrtc-internals" target="_blank" rel="noreferrer">Abrir chrome://webrtc-internals</a>
+</div>
+<div class="row" style="margin-top:.4rem; flex-wrap: wrap;">
+<span class="badge" id="dtls" title="Estado DTLS">DTLS: —</span>
+<span class="badge" id="sctp" title="Estado SCTP/DC">SCTP: —</span>
+<span class="badge" id="signaling" title="Estado de señalización">Signaling: —</span>
+<span class="badge" id="gather" title="Estado de recolección ICE">Gathering: —</span>
+</div>
+<details open>
+<summary>Logs</summary>
+<pre id="log" aria-live="polite"></pre>
+</details>
+<details>
+<summary>SDP Local</summary>
+<pre id="sdpLocal"></pre>
+</details>
+<details>
+<summary>SDP Remoto</summary>
+<pre id="sdpRemote"></pre>
+</details>
+</aside>
+</main>
+<!-- Dependencia de socket.io servida por tu servidor Node (ruta por defecto) -->
+<script src="/socket.io/socket.io.js"></script>
+<!-- Tu lógica de cliente irá aquí -->
+<script type="module" src="webrtc.js"></script>
+<!-- Notas para el alumno:
+- Mantén este HTML tal cual y trabaja la lógica en webrtc.js.
+- Elementos con id: btnJoin, btnLeave, btnStart, btnCall, btnAnswer, btnHangup, chkTrickle, chkAudio, chkVideo, btnToggleMic, btnToggleCam, btnShare.
+- Campos de estado: pcState, iceState, role, participants, selectedPair, dtls, sctp, signaling, gather, sdpLocal, sdpRemote, log.
+- Videos: #local (muted) y #remote.
+- socket.io debe estar disponible en /socket.io/socket.io.js desde tu servidor de señalización.
+-->
+</body>
+</html>
