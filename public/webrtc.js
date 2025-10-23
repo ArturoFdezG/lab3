@@ -351,7 +351,32 @@ async function ensurePC() {
       remoteStream = new MediaStream();
       ui.remoteVideo.srcObject = remoteStream;
     }
-    e.streams[0]?.getTracks().forEach(t => remoteStream.addTrack(t));
+
+    const track = e.track;
+    const addTrackToRemote = () => {
+      if (!remoteStream) return;
+      if (!remoteStream.getTracks().includes(track)) {
+        remoteStream.addTrack(track);
+        ui.remoteVideo.play?.().catch(() => {});
+      }
+    };
+
+    if (track.muted) {
+      track.addEventListener("unmute", addTrackToRemote, { once: true });
+    } else {
+      addTrackToRemote();
+    }
+
+    track.addEventListener("ended", () => {
+      if (!remoteStream) return;
+      if (remoteStream.getTracks().includes(track)) {
+        remoteStream.removeTrack(track);
+        if (remoteStream.getTracks().length === 0) {
+          ui.remoteVideo.srcObject = null;
+          remoteStream = null;
+        }
+      }
+    });
   });
 
   // DataChannel opcional
