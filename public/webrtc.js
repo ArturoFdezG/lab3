@@ -260,21 +260,25 @@ async function startLocal() {
 
 // ---------- Llamada: Call / Answer / Hangup ----------
 ui.btnCall.addEventListener("click", async () => {
-  await ensureLocal();
-  await ensurePC();
-  addLocalTracksOnce();
+  try {
+    await ensureLocal();
+    await ensurePC();
+    addLocalTracksOnce();
 
-  const trickle = ui.chkTrickle.checked;
-  log(`📤 createOffer (trickle=${trickle})`);
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  updateSDPViews();
+    const trickle = ui.chkTrickle.checked;
+    log(`📤 createOffer (trickle=${trickle})`);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    updateSDPViews();
 
-  if (trickle) {
-    emitSignal({ type: "offer", data: pc.localDescription });
-  } else {
-    await waitIceGatheringComplete();
-    emitSignal({ type: "offer", data: pc.localDescription });
+    if (trickle) {
+      emitSignal({ type: "offer", data: pc.localDescription });
+    } else {
+      await waitIceGatheringComplete();
+      emitSignal({ type: "offer", data: pc.localDescription });
+    }
+  } catch (e) {
+    log("❌ call error:", e.message || e);
   }
 });
 
