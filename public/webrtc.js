@@ -49,10 +49,9 @@ let statsTimer = null;
 let pendingRemoteOffer = null;
 let screenTrack = null;
 
-// Servidores ICE (STUN público)
-const rtcConfig = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-};
+// Servidores ICE (se obtienen del backend). Forzamos TURN únicamente.
+let rtcConfig = { iceServers: [] };
+let iceConfigPromise = null;
 
 // ---------- Utilidades ----------
 function log(...args) {
@@ -61,6 +60,48 @@ function log(...args) {
   ui.log.textContent += line + "\n";
   ui.log.scrollTop = ui.log.scrollHeight;
 }
+
+async function ensureIceConfig() {
+  if (!iceConfigPromise) {
+    iceConfigPromise = (async () => {
+      try {
+        const res = await fetch("/ice-config", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data && Array.isArray(data.iceServers)) {
+          const turnOnly = data.iceServers
+            .map(server => {
+              const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+              const filtered = urls.filter(url => /^turns?:/i.test(url));
+              if (!filtered.length) return null;
+
+              return {
+                ...server,
+                urls: filtered.length === 1 ? filtered[0] : filtered,
+              };
+            })
+            .filter(Boolean);
+
+          rtcConfig = { iceServers: turnOnly };
+          if (turnOnly.length) {
+            log("🔧 ICE (solo TURN)", turnOnly);
+          } else {
+            log("⚠️ Config ICE recibida pero sin TURN utilizable, las llamadas fallarán");
+          }
+        } else {
+          log("ℹ️ Config ICE vacía; no hay TURN disponible");
+        }
+      } catch (err) {
+        log("⚠️ No se pudo obtener configuración ICE remota:", err.message || err);
+      }
+    })();
+  }
+
+  return iceConfigPromise;
+}
+
+// Solicita la configuración ICE en segundo plano al cargar la página
+ensureIceConfig();
 
 function setBadge(el, text, type = "warn") {
   el.textContent = text;
@@ -234,21 +275,25 @@ async function startLocal() {
 
 // ---------- Llamada: Call / Answer / Hangup ----------
 ui.btnCall.addEventListener("click", async () => {
-  await ensureLocal();
-  await ensurePC();
-  addLocalTracksOnce();
+  try {
+    await ensureLocal();
+    await ensurePC();
+    addLocalTracksOnce();
 
-  const trickle = ui.chkTrickle.checked;
-  log(`📤 createOffer (trickle=${trickle})`);
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  updateSDPViews();
+    const trickle = ui.chkTrickle.checked;
+    log(`📤 createOffer (trickle=${trickle})`);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    updateSDPViews();
 
-  if (trickle) {
-    emitSignal({ type: "offer", data: pc.localDescription });
-  } else {
-    await waitIceGatheringComplete();
-    emitSignal({ type: "offer", data: pc.localDescription });
+    if (trickle) {
+      emitSignal({ type: "offer", data: pc.localDescription });
+    } else {
+      await waitIceGatheringComplete();
+      emitSignal({ type: "offer", data: pc.localDescription });
+    }
+  } catch (e) {
+    log("❌ call error:", e.message || e);
   }
 });
 
@@ -310,6 +355,10 @@ async function ensureLocal() {
 async function ensurePC() {
   if (pc) return;
 
+  await ensureIceConfig();
+  if (!rtcConfig.iceServers.length) {
+    throw new Error("No hay TURN configurado en el servidor");
+  }
   pc = new RTCPeerConnection(rtcConfig);
 
   pc.addEventListener("connectionstatechange", () => {
