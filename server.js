@@ -39,101 +39,107 @@ const defaultStunUrls = allowStunFallback
 
 const baseIceServers = defaultStunUrls.map(url => ({ urls: url }));
 
-const turnUrls = (() => {
+const defaultTurnHost = process.env.TURN_HOST?.trim() || "10.251.0.10";
+const defaultTurnUdpPort = process.env.TURN_PORT || "3478";
+const defaultTurnTlsPort = process.env.TURN_TLS_PORT || "5349";
+const defaultTurnTransports = (process.env.TURN_TRANSPORTS || "udp,tcp")
+  .split(",")
+  .map(t => t.trim())
+  .filter(Boolean);
+
+function computeTurnUrls() {
   const urlsFromEnv = (process.env.TURN_URLS || "")
     .split(",")
     .map(url => url.trim())
     .filter(Boolean);
 
-  if (urlsFromEnv.length) return urlsFromEnv;
+  if (urlsFromEnv.length) {
+    return urlsFromEnv;
+  }
 
-  const host = process.env.TURN_HOST?.trim();
-  if (!host) return urlsFromEnv;
-
-  const udpPort = process.env.TURN_PORT || "3478";
-  const tlsPort = process.env.TURN_TLS_PORT || "5349";
-  const transports = (process.env.TURN_TRANSPORTS || "udp,tcp")
-    .split(",")
-    .map(t => t.trim())
-    .filter(Boolean);
+  if (!defaultTurnHost) {
+    return [];
+  }
 
   const computed = [];
-  transports.forEach(transport => {
-    computed.push(`turn:${host}:${udpPort}?transport=${transport}`);
+  defaultTurnTransports.forEach(transport => {
+    computed.push(`turn:${defaultTurnHost}:${defaultTurnUdpPort}?transport=${transport}`);
   });
 
   if (process.env.TURN_DISABLE_TLS !== "1") {
-    computed.push(`turns:${host}:${tlsPort}?transport=udp`);
+    computed.push(`turns:${defaultTurnHost}:${defaultTurnTlsPort}`);
   }
 
   if (process.env.TURN_INCLUDE_STUN === "1") {
-    baseIceServers.push({ urls: `stun:${host}:${udpPort}` });
+    baseIceServers.push({ urls: `stun:${defaultTurnHost}:${defaultTurnUdpPort}` });
   }
 
   return computed;
-})();
+}
+
+const turnUrls = computeTurnUrls();
 
 const turnSecret = process.env.TURN_STATIC_SECRET;
-const turnUsername = process.env.TURN_USERNAME;
-const turnPassword = process.env.TURN_PASSWORD;
+const turnUsername = process.env.TURN_USERNAME || "groupx";
+const turnPassword = process.env.TURN_PASSWORD || "groupx";
 const turnTtlSeconds = Number.parseInt(process.env.TURN_TTL || "3600", 10);
 const turnUserPrefix = process.env.TURN_USER_PREFIX || "webrtc";
+const forceRelayPolicy = process.env.ICE_FORCE_RELAY !== "0";
 
 function normalizeTurnOnly(servers) {
   return servers
     .map(server => {
       const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-      const turnUrls = urls.filter(url => /^turns?:/i.test(url));
-      if (turnUrls.length === 0) {
-        return null;
-      }
-
+      const turnOnly = urls.filter(url => /^turns?:/i.test(url));
+      if (!turnOnly.length) return null;
       return {
         ...server,
-        urls: turnUrls.length === 1 ? turnUrls[0] : turnUrls,
+        urls: turnOnly.length === 1 ? turnOnly[0] : turnOnly,
       };
     })
     .filter(Boolean);
 }
 
-function buildIceServers() {
+function buildIceConfig() {
   const iceServers = [...baseIceServers];
 
-  if (turnUrls.length === 0) {
+  if (!turnUrls.length) {
     const normalizedEmpty = normalizeTurnOnly(iceServers);
-    if (normalizedEmpty.length === 0) {
+    if (!normalizedEmpty.length) {
       console.warn("[ICE] No TURN servers configured; clients will fail to connect");
     }
-    return normalizedEmpty;
+    return {
+      iceServers: normalizedEmpty,
+      iceTransportPolicy: forceRelayPolicy ? "relay" : undefined,
+    };
   }
 
   if (turnSecret) {
     const timestamp = Math.floor(Date.now() / 1000) + Math.max(turnTtlSeconds, 1);
     const username = `${timestamp}:${turnUserPrefix}`;
     const credential = crypto.createHmac("sha1", turnSecret).update(username).digest("base64");
-    iceServers.push({
-      urls: turnUrls,
-      username,
-      credential,
-    });
+    iceServers.push({ urls: turnUrls, username, credential });
   } else if (turnUsername && turnPassword) {
-    iceServers.push({
-      urls: turnUrls,
-      username: turnUsername,
-      credential: turnPassword,
-    });
+    iceServers.push({ urls: turnUrls, username: turnUsername, credential: turnPassword });
+  } else {
+    console.warn("[ICE] TURN credentials missing; clients may fail authentication");
   }
 
   const normalized = normalizeTurnOnly(iceServers);
-  if (normalized.length === 0) {
-    console.warn("[ICE] TURN credentials missing; filtered configuration is empty");
+  if (!normalized.length) {
+    console.warn("[ICE] TURN configuration filtered down to empty set");
   }
-  return normalized;
+
+  return {
+    iceServers: normalized,
+    iceTransportPolicy: forceRelayPolicy ? "relay" : undefined,
+  };
 }
 
 app.get("/ice-config", (_req, res) => {
   res.set("Cache-Control", "no-store");
-  res.json({ iceServers: buildIceServers() });
+  const config = buildIceConfig();
+  res.json(config);
 });
 
 // Helpers

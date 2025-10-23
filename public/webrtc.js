@@ -50,7 +50,7 @@ let pendingRemoteOffer = null;
 let screenTrack = null;
 
 // Servidores ICE (se obtienen del backend). Forzamos TURN únicamente.
-let rtcConfig = { iceServers: [] };
+let rtcConfig = { iceServers: [], iceTransportPolicy: "relay" };
 let iceConfigPromise = null;
 
 // ---------- Utilidades ----------
@@ -82,7 +82,8 @@ async function ensureIceConfig() {
             })
             .filter(Boolean);
 
-          rtcConfig = { iceServers: turnOnly };
+          const policy = data.iceTransportPolicy === "relay" ? "relay" : undefined;
+          rtcConfig = { iceServers: turnOnly, iceTransportPolicy: policy };
           if (turnOnly.length) {
             log("🔧 ICE (solo TURN)", turnOnly);
           } else {
@@ -359,7 +360,11 @@ async function ensurePC() {
   if (!rtcConfig.iceServers.length) {
     throw new Error("No hay TURN configurado en el servidor");
   }
-  pc = new RTCPeerConnection(rtcConfig);
+  const config = { iceServers: rtcConfig.iceServers };
+  if (rtcConfig.iceTransportPolicy) {
+    config.iceTransportPolicy = rtcConfig.iceTransportPolicy;
+  }
+  pc = new RTCPeerConnection(config);
 
   pc.addEventListener("connectionstatechange", () => {
     const st = pc.connectionState;
